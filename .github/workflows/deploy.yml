@@ -264,14 +264,27 @@ jobs:
       # 4. Adds EC2 host to known_hosts (prevents SSH prompt)
       #
       - name: Setup SSH key
+        env:
+          # Store SSH key in environment variable for safer handling
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           # Create .ssh directory if it doesn't exist
           mkdir -p ~/.ssh
 
-          # Write SSH private key from GitHub secret
-          # ${{ secrets.EC2_SSH_KEY }} = Contents of rails-demo.pem
-          # This is stored securely in GitHub and only available during workflow
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/rails-demo.pem
+          # Check if SSH key secret is set
+          if [ -z "$SSH_KEY" ]; then
+            echo "ERROR: EC2_SSH_KEY secret is not set in GitHub!"
+            echo "Please add the SSH key to GitHub Secrets:"
+            echo "1. Go to Settings → Secrets and variables → Actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: EC2_SSH_KEY"
+            echo "4. Value: Contents of rails-demo.pem file"
+            exit 1
+          fi
+
+          # Write SSH private key from environment variable
+          # Using printf to avoid issues with echo and special characters
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/rails-demo.pem
 
           # Set permissions to 600 (read/write for owner only)
           # SSH requires this for security - it won't work with wrong permissions

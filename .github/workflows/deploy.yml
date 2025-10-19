@@ -112,20 +112,23 @@ jobs:
       # ======================================================================
       # STEP 2: Configure AWS credentials
       # ======================================================================
-      # Purpose: Authenticate with AWS using IAM role
+      # Purpose: Authenticate with AWS using access keys
       # Why: We need AWS credentials to access ECR and deploy
       #
-      # This uses OIDC (OpenID Connect) for secure credential exchange
-      # Instead of storing long-lived AWS keys, GitHub creates temporary tokens
-      # This is more secure and follows AWS best practices
+      # This uses AWS access keys stored as GitHub secrets
+      # The keys are only available during the workflow run
+      # They are masked in logs for security
       #
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          # role-to-assume: ARN of IAM role to assume
-          # This role must be created in AWS and trust GitHub
-          # The role needs permissions for ECR and EC2
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          # aws-access-key-id: Your AWS access key ID
+          # Stored securely in GitHub secrets
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+          # aws-secret-access-key: Your AWS secret access key
+          # Stored securely in GitHub secrets
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
           # aws-region: AWS region for operations
           aws-region: ${{ env.AWS_REGION }}

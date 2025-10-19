@@ -1,0 +1,159 @@
+---
+# ============================================================================
+# ANSIBLE PLAYBOOK: Setup EC2 for Rails Deployment
+# ============================================================================
+#
+# This playbook installs all dependencies needed to run the Rails app:
+# - Docker (for running containers)
+# - Docker Compose (for managing containers)
+# - Git (for version control)
+# - curl (for health checks)
+# - Other system dependencies
+#
+# Run this playbook before deploying with Kamal
+#
+
+- name: Setup EC2 Instance for Rails Deployment
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    # ======================================================================
+    # Update system packages
+    # ======================================================================
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+
+    # ======================================================================
+    # Install Docker
+    # ======================================================================
+    - name: Install Docker dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+
+    - name: Start Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    # ======================================================================
+    # Install Docker Compose (standalone)
+    # ======================================================================
+    - name: Download Docker Compose
+      get_url:
+        url: https://github.com/docker/compose/releases/latest/download/docker-compose-Linux-x86_64
+        dest: /usr/local/bin/docker-compose
+        mode: '0755'
+
+    # ======================================================================
+    # Install Git
+    # ======================================================================
+    - name: Install Git
+      apt:
+        name: git
+        state: present
+
+    # ======================================================================
+    # Install curl
+    # ======================================================================
+    - name: Install curl
+      apt:
+        name: curl
+        state: present
+
+    # ======================================================================
+    # Install other useful tools
+    # ======================================================================
+    - name: Install useful tools
+      apt:
+        name:
+          - wget
+          - vim
+          - htop
+          - net-tools
+        state: present
+
+    # ======================================================================
+    # Create .kamal directory
+    # ======================================================================
+    - name: Create .kamal directory
+      file:
+        path: /home/ubuntu/.kamal
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    # ======================================================================
+    # Verify installations
+    # ======================================================================
+    - name: Verify Docker installation
+      command: docker --version
+      register: docker_version
+
+    - name: Display Docker version
+      debug:
+        msg: "{{ docker_version.stdout }}"
+
+    - name: Verify Docker Compose installation
+      command: docker-compose --version
+      register: compose_version
+
+    - name: Display Docker Compose version
+      debug:
+        msg: "{{ compose_version.stdout }}"
+
+    - name: Verify Git installation
+      command: git --version
+      register: git_version
+
+    - name: Display Git version
+      debug:
+        msg: "{{ git_version.stdout }}"
+
+    # ======================================================================
+    # Final message
+    # ======================================================================
+    - name: Setup complete
+      debug:
+        msg: "✅ EC2 instance setup complete! Ready for Kamal deployment."
+

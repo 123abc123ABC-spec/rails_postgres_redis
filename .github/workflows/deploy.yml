@@ -39,6 +39,9 @@ jobs:
       - name: Install Kamal
         run: gem install kamal
 
+      - name: Install Ansible
+        run: pip install ansible
+
       - name: Setup SSH key
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -51,6 +54,10 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/rails-demo.pem
           chmod 600 ~/.ssh/rails-demo.pem
           ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Run Ansible playbook to setup EC2
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/setup.yml
 
       - name: Deploy with Kamal (Latest Image)
         env:

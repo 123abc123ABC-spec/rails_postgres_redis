@@ -1,0 +1,184 @@
+# ============================================================================
+# GITHUB ACTIONS WORKFLOW: Deploy Only (Skip Build)
+# ============================================================================
+#
+# This workflow ONLY deploys to production without rebuilding Docker image
+# Use this when:
+# - The build succeeded but deployment failed
+# - You want to re-deploy the latest image without rebuilding
+# - You're debugging deployment issues
+#
+# How to use:
+# 1. Go to GitHub → Actions tab
+# 2. Click "Deploy Only" workflow
+# 3. Click "Run workflow"
+# 4. Click green "Run workflow" button
+#
+
+name: Deploy Only (Skip Build)
+
+# ============================================================================
+# TRIGGERS - When this workflow runs
+# ============================================================================
+on:
+  # Manual trigger only - no automatic runs
+  # You must manually trigger this from GitHub Actions tab
+  workflow_dispatch:
+
+# ============================================================================
+# ENVIRONMENT VARIABLES - Available to all jobs and steps
+# ============================================================================
+env:
+  AWS_REGION: eu-north-1
+  ECR_REGISTRY: 888577024605.dkr.ecr.eu-north-1.amazonaws.com
+  ECR_REPOSITORY: rails-app
+  RAILS_ENV: production
+  EC2_HOST: 13.60.250.114
+  EC2_USER: ubuntu
+
+# ============================================================================
+# JOBS - What this workflow does
+# ============================================================================
+jobs:
+  deploy-only:
+    name: Deploy to Production (Skip Build)
+    runs-on: ubuntu-latest
+
+    steps:
+      # ======================================================================
+      # STEP 1: Checkout code
+      # ======================================================================
+      # Purpose: Get the latest code from repository
+      # Why: We need Gemfile, config/deploy.yml, and other files
+      #
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ======================================================================
+      # STEP 2: Configure AWS credentials
+      # ======================================================================
+      # Purpose: Authenticate with AWS using access keys
+      # Why: We need AWS credentials to access ECR and deploy
+      #
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ======================================================================
+      # STEP 3: Setup Ruby
+      # ======================================================================
+      # Purpose: Install Ruby and gems
+      # Why: Kamal is a Ruby gem, we need Ruby to run it
+      #
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.0.0
+          bundler-cache: true
+
+      # ======================================================================
+      # STEP 4: Install Kamal
+      # ======================================================================
+      # Purpose: Install Kamal gem
+      # Why: We need Kamal to deploy the application
+      #
+      - name: Install Kamal
+        run: |
+          # Install Kamal gem
+          gem install kamal
+
+      # ======================================================================
+      # STEP 5: Setup SSH key
+      # ======================================================================
+      # Purpose: Configure SSH for EC2 access
+      # Why: Kamal uses SSH to connect to EC2 and deploy
+      #
+      - name: Setup SSH key
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          # Create .ssh directory if it doesn't exist
+          mkdir -p ~/.ssh
+
+          # Check if SSH key secret is set
+          if [ -z "$SSH_KEY" ]; then
+            echo "ERROR: EC2_SSH_KEY secret is not set in GitHub!"
+            echo "Please add the SSH key to GitHub Secrets:"
+            echo "1. Go to Settings → Secrets and variables → Actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: EC2_SSH_KEY"
+            echo "4. Value: Contents of rails-demo.pem file"
+            exit 1
+          fi
+
+          # Write SSH private key from environment variable
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/rails-demo.pem
+
+          # Set permissions to 600 (read/write for owner only)
+          chmod 600 ~/.ssh/rails-demo.pem
+
+          # Add EC2 host to known_hosts
+          ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # ======================================================================
+      # STEP 6: Deploy with Kamal (Using Latest Image)
+      # ======================================================================
+      # Purpose: Deploy application to production
+      # Why: This is the main deployment step
+      #
+      # This step:
+      # 1. Connects to EC2 via SSH
+      # 2. Pulls latest Docker image from ECR
+      # 3. Stops old container
+      # 4. Starts new container
+      # 5. Runs database migrations
+      # 6. Starts Sidekiq for background jobs
+      #
+      - name: Deploy with Kamal
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: |
+          # Run Kamal deploy command
+          # This connects to EC2 and deploys the application
+          kamal deploy
+
+      # ======================================================================
+      # STEP 7: Verify deployment
+      # ======================================================================
+      # Purpose: Confirm deployment was successful
+      # Why: We want to know if the app is running and healthy
+      #
+      - name: Verify deployment
+        run: |
+          # Wait for app to start
+          sleep 10
+
+          # Call health check endpoint
+          # If it returns 200, deployment was successful
+          # If it fails, the workflow will fail
+          curl -f http://${{ env.EC2_HOST }}/health || exit 1
+
+      # ======================================================================
+      # STEP 8: Deployment Success
+      # ======================================================================
+      - name: Deployment successful
+        run: |
+          echo "✅ Deployment completed successfully!"
+          echo "Application is running at: http://${{ env.EC2_HOST }}"
+          echo "Health check: http://${{ env.EC2_HOST }}/health"
+
+      # ======================================================================
+      # STEP 9: Deployment Failed
+      # ======================================================================
+      - name: Deployment failed
+        if: failure()
+        run: |
+          echo "❌ Deployment failed!"
+          echo "Check the logs above for details"
+          exit 1
+

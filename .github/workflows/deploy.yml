@@ -174,10 +174,8 @@ jobs:
           # This ensures each build has a unique tag
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Navigate to Rails app directory
-          cd rails_postgres_redis
-
           # Build Docker image
+          # Note: We're already in the repository root (rails_postgres_redis)
           # -t = tag the image with a name
           # Format: REGISTRY/REPOSITORY:TAG
           # Example: 888577024605.dkr.ecr.eu-north-1.amazonaws.com/rails-app:abc123def456
@@ -237,9 +235,7 @@ jobs:
           # Automatically runs "bundle install" to install gems
           # Uses Gemfile.lock for reproducible builds
           bundler-cache: true
-
-          # working-directory: Where to run bundle install
-          working-directory: rails_postgres_redis
+          # Note: We're already in the repository root, no need to specify working-directory
 
       # ======================================================================
       # STEP 7: Install Kamal
@@ -306,8 +302,7 @@ jobs:
       # 6. Starts Sidekiq for background jobs
       #
       - name: Deploy with Kamal
-        # working-directory: Run this step in rails_postgres_redis directory
-        working-directory: rails_postgres_redis
+        # Note: We're already in the repository root, no need to specify working-directory
         env:
           # AWS_ACCESS_KEY_ID: AWS access key
           # Needed by Kamal to authenticate with ECR

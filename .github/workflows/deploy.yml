@@ -1,0 +1,373 @@
+# ============================================================================
+# GITHUB ACTIONS WORKFLOW: Deploy to Production
+# ============================================================================
+#
+# This workflow automates the entire deployment process:
+# 1. Build Docker image when code is pushed to main branch
+# 2. Push image to AWS ECR (Elastic Container Registry)
+# 3. Deploy to production using Kamal
+# 4. Verify deployment with health check
+#
+# Workflow runs automatically on:
+# - Push to main branch
+# - Manual trigger (workflow_dispatch)
+#
+
+name: Deploy to Production
+
+# ============================================================================
+# TRIGGERS - When this workflow runs
+# ============================================================================
+on:
+  # Trigger on push to main branch
+  # Every time you push code to main, this workflow runs
+  push:
+    branches:
+      - main
+
+  # Manual trigger
+  # You can manually run this workflow from GitHub Actions tab
+  # Useful for re-deploying without code changes
+  workflow_dispatch:
+
+# ============================================================================
+# ENVIRONMENT VARIABLES - Available to all jobs and steps
+# ============================================================================
+#
+# These variables are used throughout the workflow
+# They're defined once here to avoid repetition
+#
+env:
+  # AWS region where your infrastructure is located
+  # Must match your EC2, RDS, and ECR region
+  AWS_REGION: eu-north-1
+
+  # ECR registry URL
+  # Format: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com
+  # This is where Docker images are stored
+  ECR_REGISTRY: 888577024605.dkr.ecr.eu-north-1.amazonaws.com
+
+  # ECR repository name
+  # This is the name of your Docker image repository in ECR
+  ECR_REPOSITORY: rails-app
+
+  # Rails environment
+  # Set to production for production deployments
+  RAILS_ENV: production
+
+# ============================================================================
+# JOBS - The actual work that runs
+# ============================================================================
+#
+# A workflow can have multiple jobs that run in parallel
+# We have one job: build-and-deploy
+#
+jobs:
+  # Job name: build-and-deploy
+  # This job handles building, pushing, and deploying
+  build-and-deploy:
+    # runs-on: Which machine to run this job on
+    # ubuntu-latest = Latest Ubuntu Linux machine provided by GitHub
+    # This machine has Docker, Git, and other tools pre-installed
+    runs-on: ubuntu-latest
+
+    # ========================================================================
+    # PERMISSIONS - What this workflow can do
+    # ========================================================================
+    #
+    # GitHub Actions uses least-privilege principle
+    # We explicitly grant only the permissions we need
+    #
+    permissions:
+      # contents: read
+      # Allows reading repository contents (code, files)
+      # Needed for: git checkout
+      contents: read
+
+      # id-token: write
+      # Allows creating OIDC tokens for AWS authentication
+      # Needed for: AWS IAM role assumption (secure credential exchange)
+      # This is more secure than using long-lived AWS keys
+      id-token: write
+
+    # ========================================================================
+    # STEPS - Individual tasks that run sequentially
+    # ========================================================================
+    #
+    # Each step runs one after another
+    # If any step fails, the workflow stops
+    #
+    steps:
+      # ======================================================================
+      # STEP 1: Checkout code
+      # ======================================================================
+      # Purpose: Download your repository code to the GitHub Actions machine
+      # Why: We need the code to build the Docker image
+      #
+      - name: Checkout code
+        # uses: Use a pre-built action from GitHub Marketplace
+        # actions/checkout@v4 = Official GitHub action to clone repository
+        uses: actions/checkout@v4
+
+      # ======================================================================
+      # STEP 2: Configure AWS credentials
+      # ======================================================================
+      # Purpose: Authenticate with AWS using IAM role
+      # Why: We need AWS credentials to access ECR and deploy
+      #
+      # This uses OIDC (OpenID Connect) for secure credential exchange
+      # Instead of storing long-lived AWS keys, GitHub creates temporary tokens
+      # This is more secure and follows AWS best practices
+      #
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          # role-to-assume: ARN of IAM role to assume
+          # This role must be created in AWS and trust GitHub
+          # The role needs permissions for ECR and EC2
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+          # aws-region: AWS region for operations
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ======================================================================
+      # STEP 3: Login to Amazon ECR
+      # ======================================================================
+      # Purpose: Authenticate Docker with AWS ECR
+      # Why: We need to push Docker images to ECR
+      #
+      # This step:
+      # 1. Gets temporary credentials from AWS
+      # 2. Logs Docker into ECR
+      # 3. Outputs the registry URL for use in later steps
+      #
+      - name: Login to Amazon ECR
+        # id: Gives this step an identifier
+        # We use this to reference outputs from this step
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ======================================================================
+      # STEP 4: Build Docker image
+      # ======================================================================
+      # Purpose: Build Docker image from Dockerfile
+      # Why: We need a Docker image to push to ECR and deploy
+      #
+      # This step:
+      # 1. Navigates to rails_postgres_redis directory
+      # 2. Builds Docker image with git commit SHA as tag
+      # 3. Also tags it as "latest"
+      # 4. Outputs the image name for later use
+      #
+      - name: Build Docker image
+        id: build-image
+        env:
+          # ECR_REGISTRY: Get from previous step's output
+          # ${{ steps.login-ecr.outputs.registry }} = Output from login-ecr step
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+
+          # IMAGE_TAG: Use git commit SHA as unique identifier
+          # ${{ github.sha }} = Full commit hash (e.g., abc123def456...)
+          # This ensures each build has a unique tag
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Navigate to Rails app directory
+          cd rails_postgres_redis
+
+          # Build Docker image
+          # -t = tag the image with a name
+          # Format: REGISTRY/REPOSITORY:TAG
+          # Example: 888577024605.dkr.ecr.eu-north-1.amazonaws.com/rails-app:abc123def456
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+          # Also tag as "latest"
+          # This makes it easy to always deploy the most recent version
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+          # Output the image name for use in later steps
+          # This stores the value in GitHub's output system
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # ======================================================================
+      # STEP 5: Push image to Amazon ECR
+      # ======================================================================
+      # Purpose: Upload Docker image to ECR
+      # Why: Kamal needs to pull the image from ECR to deploy
+      #
+      # This step:
+      # 1. Pushes the image with commit SHA tag
+      # 2. Pushes the image with "latest" tag
+      # Both tags point to the same image, just different names
+      #
+      - name: Push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Push image with commit SHA tag
+          # This creates a permanent record of this specific build
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+          # Push image with "latest" tag
+          # This is what Kamal will pull for deployment
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # ======================================================================
+      # STEP 6: Setup Ruby
+      # ======================================================================
+      # Purpose: Install Ruby and dependencies
+      # Why: Kamal is a Ruby gem, we need Ruby to run it
+      #
+      # This step:
+      # 1. Installs Ruby 3.4.7
+      # 2. Installs gems from Gemfile.lock (bundler-cache: true)
+      # 3. Works in rails_postgres_redis directory
+      #
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          # ruby-version: Which Ruby version to install
+          # Must match your local Ruby version
+          ruby-version: 3.4.7
+
+          # bundler-cache: true
+          # Automatically runs "bundle install" to install gems
+          # Uses Gemfile.lock for reproducible builds
+          bundler-cache: true
+
+          # working-directory: Where to run bundle install
+          working-directory: rails_postgres_redis
+
+      # ======================================================================
+      # STEP 7: Install Kamal
+      # ======================================================================
+      # Purpose: Install Kamal gem
+      # Why: We need Kamal to deploy the application
+      #
+      # This step:
+      # 1. Installs Kamal gem globally
+      # 2. Makes "kamal" command available
+      #
+      - name: Install Kamal
+        run: gem install kamal
+
+      # ======================================================================
+      # STEP 8: Setup SSH key
+      # ======================================================================
+      # Purpose: Configure SSH key for EC2 access
+      # Why: Kamal uses SSH to connect to EC2 and deploy
+      #
+      # This step:
+      # 1. Creates ~/.ssh directory
+      # 2. Writes SSH private key from GitHub secret
+      # 3. Sets correct permissions (600 = read/write for owner only)
+      # 4. Adds EC2 host to known_hosts (prevents SSH prompt)
+      #
+      - name: Setup SSH key
+        run: |
+          # Create .ssh directory if it doesn't exist
+          mkdir -p ~/.ssh
+
+          # Write SSH private key from GitHub secret
+          # ${{ secrets.EC2_SSH_KEY }} = Contents of rails-demo.pem
+          # This is stored securely in GitHub and only available during workflow
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/rails-demo.pem
+
+          # Set permissions to 600 (read/write for owner only)
+          # SSH requires this for security - it won't work with wrong permissions
+          chmod 600 ~/.ssh/rails-demo.pem
+
+          # Add EC2 host to known_hosts
+          # This prevents SSH from asking "Are you sure you want to continue?"
+          # 2>/dev/null = Suppress error messages
+          # || true = Don't fail if this command fails
+          ssh-keyscan -H 13.60.250.114 >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # ======================================================================
+      # STEP 9: Deploy with Kamal
+      # ======================================================================
+      # Purpose: Deploy application to production
+      # Why: This is the main deployment step
+      #
+      # This step:
+      # 1. Navigates to rails_postgres_redis directory
+      # 2. Sets environment variables needed by Kamal
+      # 3. Runs "kamal deploy" command
+      #
+      # What kamal deploy does:
+      # 1. Connects to EC2 via SSH
+      # 2. Pulls Docker image from ECR
+      # 3. Stops old container
+      # 4. Starts new container
+      # 5. Runs database migrations
+      # 6. Starts Sidekiq for background jobs
+      #
+      - name: Deploy with Kamal
+        # working-directory: Run this step in rails_postgres_redis directory
+        working-directory: rails_postgres_redis
+        env:
+          # AWS_ACCESS_KEY_ID: AWS access key
+          # Needed by Kamal to authenticate with ECR
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+
+          # AWS_SECRET_ACCESS_KEY: AWS secret key
+          # Needed by Kamal to authenticate with ECR
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          # RAILS_MASTER_KEY: Rails credentials key
+          # Needed by Rails to decrypt credentials.yml.enc
+          RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
+        run: |
+          # Run Kamal deploy command
+          # This connects to EC2 and deploys the application
+          kamal deploy
+
+      # ======================================================================
+      # STEP 10: Verify deployment
+      # ======================================================================
+      # Purpose: Confirm deployment was successful
+      # Why: We want to know if the app is running and healthy
+      #
+      # This step:
+      # 1. Waits 10 seconds for app to start
+      # 2. Calls health check endpoint
+      # 3. Fails if health check returns error
+      #
+      - name: Verify deployment
+        run: |
+          # Wait 10 seconds for application to start
+          # Docker container needs time to initialize
+          sleep 10
+
+          # Call health check endpoint
+          # curl -f = Fail if HTTP status is not 2xx or 3xx
+          # http://13.60.250.114/health = Your health check endpoint
+          # || exit 1 = Exit with error code 1 if curl fails
+          curl -f http://13.60.250.114/health || exit 1
+
+      # ======================================================================
+      # STEP 11: Notify deployment success
+      # ======================================================================
+      # Purpose: Print success message
+      # Why: Provides feedback that deployment completed successfully
+      #
+      # if: success()
+      # This step only runs if all previous steps succeeded
+      #
+      - name: Notify deployment success
+        if: success()
+        run: echo "✅ Deployment successful!"
+
+      # ======================================================================
+      # STEP 12: Notify deployment failure
+      # ======================================================================
+      # Purpose: Print failure message
+      # Why: Provides feedback if deployment failed
+      #
+      # if: failure()
+      # This step only runs if any previous step failed
+      #
+      - name: Notify deployment failure
+        if: failure()
+        run: echo "❌ Deployment failed!"
+

@@ -228,27 +228,15 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           # ruby-version: Which Ruby version to install
-          # Must match your local Ruby version
-          ruby-version: 3.4.7
+          # IMPORTANT: Must match the version in your Gemfile
+          # Your Gemfile specifies: ruby '3.0.0'
+          ruby-version: 3.0.0
 
-          # bundler-cache: false
-          # We disable automatic bundle install because old bundler is incompatible with Ruby 3.4.7
-          # We'll update bundler manually in the next step
-          bundler-cache: false
-
-      # ======================================================================
-      # STEP 6B: Update Bundler and Install Gems
-      # ======================================================================
-      # Purpose: Update bundler to compatible version and install gems
-      # Why: Bundler 2.2.15 is incompatible with Ruby 3.4.7
-      #
-      - name: Update Bundler and Install Gems
-        run: |
-          # Update bundler to latest version compatible with Ruby 3.4.7
-          gem update bundler
-
-          # Install gems from Gemfile
-          bundle install
+          # bundler-cache: true
+          # Automatically runs "bundle install" to install gems
+          # Uses Gemfile.lock for reproducible builds
+          # Ruby 3.0.0 comes with compatible bundler version
+          bundler-cache: true
 
       # ======================================================================
       # STEP 7: Install Kamal

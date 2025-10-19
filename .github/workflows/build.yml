@@ -8,6 +8,22 @@ on:
   push:
     branches:
       - main
+    # Only trigger on these paths (ignore documentation and config files)
+    paths:
+      - 'app/**'
+      - 'config/**'
+      - 'db/**'
+      - 'lib/**'
+      - 'public/**'
+      - 'Gemfile'
+      - 'Gemfile.lock'
+      - 'Dockerfile'
+      - '.github/workflows/build.yml'
+    # Ignore these paths (don't trigger build)
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.env.example'
   workflow_dispatch:
 
 env:
